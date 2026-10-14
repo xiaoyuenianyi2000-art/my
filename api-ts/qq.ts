@@ -36,7 +36,13 @@ const parseCookieJar = (cookie: string): Record<string, string> => {
   const jar: Record<string, string> = {};
   for (const entry of cookie.split(';')) {
     const separator = entry.indexOf('=');
-    if (separator <= 0) continue;
+    if (separator <= 0) {
+      // QQ 音乐 web 的登录 Cookie 有时把 uin（QQ 号）写成无键名的裸数字（`;1791989470;`），
+      // 单独记下来当作候选 uin；只要纯数字位数够，就不参与其他字段的干扰。
+      const bare = entry.trim();
+      if (/^\d{5,}$/.test(bare) && !('__bare_uin' in jar)) jar['__bare_uin'] = bare;
+      continue;
+    }
     const name = entry.slice(0, separator).trim();
     const value = entry.slice(separator + 1).trim();
     if (name) jar[name] = value;
@@ -68,7 +74,7 @@ export default async function handler(request: Request): Promise<Response> {
     if (!cookie) return json({ code: 400, message: 'cookie is required (cookie=... copied from music.qq.com)' }, 400);
 
     const jar = parseCookieJar(cookie);
-    const uin = jar['uin'] ?? jar['qqmusic_uin'];
+    const uin = jar['uin'] ?? jar['qqmusic_uin'] ?? jar['__uin'] ?? jar['__bare_uin'];
     const musickey = jar['musickey'] ?? jar['qm_keyst'] ?? jar['qqmusic_key'];
     if (!uin || !musickey) {
       return json(
