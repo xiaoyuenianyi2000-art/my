@@ -1,4 +1,5 @@
 import handleRequest from '@yakult-green-tea/qq-music-api/serverless';
+import { sealToken, SEALED_AUTH_PURPOSE } from '@yakult-green-tea/qq-music-api/dist/src/serverless/sealedSession.js';
 
 // api-ts/qq.ts
 
@@ -19,6 +20,26 @@ import handleRequest from '@yakult-green-tea/qq-music-api/serverless';
 
 export const config = { runtime: 'edge' };
 
+const json = (body: unknown, status = 200, headers: Record<string, string> = {}): Response =>
+  new Response(JSON.stringify(body), {
+    status,
+    headers: { 'content-type': 'application/json; charset=utf-8', ...headers },
+  });
+
+const parseCookieJar = (cookie: string): Record<string, string> => {
+  const jar: Record<string, string> = {};
+  for (const entry of cookie.split(';')) {
+    const separator = entry.indexOf('=');
+    if (separator <= 0) continue;
+    const name = entry.slice(0, separator).trim();
+    const value = entry.slice(separator + 1).trim();
+    if (name) jar[name] = value;
+  }
+  return jar;
+};
+
+const COOKIE_LOGIN_TTL_MS = 24 * 60 * 60 * 1000;
+
 export default async function handler(request: Request): Promise<Response> {
   const url = new URL(request.url);
 
@@ -28,6 +49,50 @@ export default async function handler(request: Request): Promise<Response> {
   params.delete('path');
 
   const normalized = path.startsWith('/') ? path : `/${path}`;
+
+  // ── Cookie 登录 ───────────────────────────────────────────────────────────
+  // 手机端没法像桌面那样内嵌后端扫 QQ 码，改由用户把在 music.qq.com / y.qq.com 登录后复制来的
+  // Cookie（含 uin 与 musickey）交给后端，后端把它封成与扫码同样的 sealed 会话令牌返回。
+  // 请求 QQ 音乐实际只需要 uin(=musicid) + musickey，而 y.qq.com 登录态里正好有这两个字段。
+  if (normalized === '/login/cookie') {
+    const secret = process.env.QQ_SESSION_SECRET;
+    if (!secret) return json({ code: 501, message: 'QQ_SESSION_SECRET is not set on the server' }, 501);
+
+    const cookie = params.get('cookie') ?? '';
+    if (!cookie) return json({ code: 400, message: 'cookie is required (cookie=... copied from music.qq.com)' }, 400);
+
+    const jar = parseCookieJar(cookie);
+    const uin = jar['uin'] ?? jar['qqmusic_uin'];
+    const musickey = jar['musickey'] ?? jar['qm_keyst'] ?? jar['qqmusic_key'];
+    if (!uin || !musickey) {
+      return json(
+        {
+          code: 400,
+          message: 'cookie must contain uin=... and musickey=... — log in at music.qq.com, then copy the Cookie header',
+        },
+        400,
+      );
+    }
+
+    const credential = {
+      musicid: Number(uin) || uin,
+      str_musicid: String(uin),
+      musickey,
+      loginType: 6,
+      ...(jar['encryptUin'] ? { encryptUin: jar['encryptUin'] } : {}),
+    };
+    const token = await sealToken(
+      { v: 1, iat: Date.now(), exp: Date.now() + COOKIE_LOGIN_TTL_MS, cred: credential },
+      SEALED_AUTH_PURPOSE,
+      secret,
+    );
+    return json(
+      { code: 200, data: { token } },
+      200,
+      { 'set-cookie': `qqmusic_session=${token}; HttpOnly; Max-Age=${COOKIE_LOGIN_TTL_MS / 1000}; SameSite=Lax; Path=/` },
+    );
+  }
+
   const search = params.toString();
   const target = new URL(`${normalized}${search ? `?${search}` : ''}`, url.origin);
 
