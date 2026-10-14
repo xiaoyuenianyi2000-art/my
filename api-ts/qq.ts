@@ -23,7 +23,13 @@ export const config = { runtime: 'edge' };
 const json = (body: unknown, status = 200, headers: Record<string, string> = {}): Response =>
   new Response(JSON.stringify(body), {
     status,
-    headers: { 'content-type': 'application/json; charset=utf-8', ...headers },
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+      // Capacitor WebView（capacitor://localhost / https://localhost）会跨域请求这个接口，
+      // 不带这条 CORS 头浏览器就会拦掉响应（Failed to fetch）。`*` 对默认（不带 credentials）的 fetch 合法。
+      'access-control-allow-origin': '*',
+      ...headers,
+    },
   });
 
 const parseCookieJar = (cookie: string): Record<string, string> => {
