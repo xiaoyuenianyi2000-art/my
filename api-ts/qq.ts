@@ -91,7 +91,9 @@ export default async function handler(request: Request): Promise<Response> {
       str_musicid: String(uin),
       musickey,
       loginType: 6,
-      ...(jar['encryptUin'] ? { encryptUin: jar['encryptUin'] } : {}),
+      // 网页版登录态里加密的 QQ 号在 `euin`（不是 `encryptUin`），后端拿它才拉得到完整用户资料。
+      // 缺这个字段时 y.qq.com 会回 HTTP 200/code 0 但 GetLoginUserInfo 返回空 → 账户刷新失败。
+      ...(jar['encryptUin'] || jar['euin'] ? { encryptUin: jar['encryptUin'] || jar['euin'] } : {}),
     };
     const token = await sealToken(
       { v: 1, iat: Date.now(), exp: Date.now() + COOKIE_LOGIN_TTL_MS, cred: credential },
